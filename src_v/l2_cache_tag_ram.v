@@ -31,17 +31,17 @@
 module l2_cache_tag_ram
 (
     // Inputs
-     input           clk0_i
-    ,input           rst0_i
-    ,input  [ 10:0]  addr0_i
-    ,input           clk1_i
-    ,input           rst1_i
-    ,input  [ 10:0]  addr1_i
-    ,input  [ 17:0]  data1_i
-    ,input           wr1_i
+    input           clk0_i,
+    input           rst0_i,
+    input  [ 10:0]  addr0_i,
+    input           clk1_i,
+    input           rst1_i,
+    input  [ 10:0]  addr1_i,
+    input  [ 17:0]  data1_i,
+    input           wr1_i,
 
     // Outputs
-    ,output [ 17:0]  data0_o
+    output [ 17:0]  data0_o
 );
 
 

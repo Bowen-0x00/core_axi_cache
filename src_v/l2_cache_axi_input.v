@@ -33,52 +33,53 @@ module l2_cache_axi_input
 // Params
 //-----------------------------------------------------------------
 #(
-     parameter DATA_W = 32
-    ,parameter STRB_W = 4
-    ,parameter ID_W   = 4
-    ,parameter RW_ARB = 1  // Arbitrate between reads and writes
+    parameter ADDR_W = 32,
+    parameter DATA_W = 32,
+    parameter STRB_W = 4,
+    parameter ID_W   = 4,
+    parameter RW_ARB = 1  // Arbitrate between reads and writes
 )
 //-----------------------------------------------------------------
 // Ports
 //-----------------------------------------------------------------
 (
-     input                clk_i
-    ,input                rst_i
+    input                clk_i,
+    input                rst_i,
 
     // AXI
-    ,input                axi_awvalid_i
-    ,input  [ 31:0]       axi_awaddr_i
-    ,input  [ID_W-1:0]    axi_awid_i
-    ,input  [  7:0]       axi_awlen_i
-    ,input  [  1:0]       axi_awburst_i
-    ,input                axi_wvalid_i
-    ,input  [DATA_W-1:0]  axi_wdata_i
-    ,input  [STRB_W-1:0]  axi_wstrb_i
-    ,input                axi_wlast_i
-    ,input                axi_arvalid_i
-    ,input  [ 31:0]       axi_araddr_i
-    ,input  [ID_W-1:0]    axi_arid_i
-    ,input  [  7:0]       axi_arlen_i
-    ,input  [  1:0]       axi_arburst_i
-    ,output               axi_awready_o
-    ,output               axi_wready_o
-    ,output               axi_arready_o
+    input                axi_awvalid_i,
+    input  [ADDR_W-1:0]  axi_awaddr_i,
+    input  [ID_W-1:0]    axi_awid_i,
+    input  [  7:0]       axi_awlen_i,
+    input  [  1:0]       axi_awburst_i,
+    input                axi_wvalid_i,
+    input  [DATA_W-1:0]  axi_wdata_i,
+    input  [STRB_W-1:0]  axi_wstrb_i,
+    input                axi_wlast_i,
+    input                axi_arvalid_i,
+    input  [ADDR_W-1:0]  axi_araddr_i,
+    input  [ID_W-1:0]    axi_arid_i,
+    input  [  7:0]       axi_arlen_i,
+    input  [  1:0]       axi_arburst_i,
+    output               axi_awready_o,
+    output               axi_wready_o,
+    output               axi_arready_o,
 
     // Write
-    ,output               wr_valid_o
-    ,input                wr_accept_i
-    ,output [ 31:0]       wr_addr_o
-    ,output [ID_W-1:0]    wr_id_o
-    ,output [DATA_W-1:0]  wr_data_o
-    ,output [STRB_W-1:0]  wr_strb_o
-    ,output               wr_last_o
+    output               wr_valid_o,
+    input                wr_accept_i,
+    output [ADDR_W-1:0]  wr_addr_o,
+    output [ID_W-1:0]    wr_id_o,
+    output [DATA_W-1:0]  wr_data_o,
+    output [STRB_W-1:0]  wr_strb_o,
+    output               wr_last_o,
 
     // Read
-    ,output               rd_valid_o
-    ,input                rd_accept_i
-    ,output [ 31:0]       rd_addr_o
-    ,output [ID_W-1:0]    rd_id_o
-    ,output               rd_last_o
+    output               rd_valid_o,
+    input                rd_accept_i,
+    output [ADDR_W-1:0]  rd_addr_o,
+    output [ID_W-1:0]    rd_id_o,
+    output               rd_last_o
 );
 
 //-----------------------------------------------------------------
@@ -165,19 +166,19 @@ wire wr_accept_w = wr_enable_w & wr_accept_i;
 //-----------------------------------------------------------------
 // Write address skid buffer
 //-----------------------------------------------------------------
-reg             awvalid_q;
-reg [31:0]      awaddr_q;
-reg [1:0]       awburst_q;
-reg [7:0]       awlen_q;
-reg [ID_W-1:0]  awid_q;
+reg                 awvalid_q;
+reg [ADDR_W-1:0]    awaddr_q;
+reg [1:0]           awburst_q;
+reg [7:0]           awlen_q;
+reg [ID_W-1:0]      awid_q;
 
-wire            awvalid_w = awvalid_q | axi_awvalid_i;
-wire [31:0]     awaddr_w  = awvalid_q ? awaddr_q  : axi_awaddr_i;
-wire [1:0]      awburst_w = awvalid_q ? awburst_q : axi_awburst_i;
-wire [7:0]      awlen_w   = awvalid_q ? awlen_q   : axi_awlen_i;
-wire [ID_W-1:0] awid_w    = awvalid_q ? awid_q    : axi_awid_i;
+wire                awvalid_w = awvalid_q | axi_awvalid_i;
+wire [ADDR_W-1:0]   awaddr_w  = awvalid_q ? awaddr_q  : axi_awaddr_i;
+wire [1:0]          awburst_w = awvalid_q ? awburst_q : axi_awburst_i;
+wire [7:0]          awlen_w   = awvalid_q ? awlen_q   : axi_awlen_i;
+wire [ID_W-1:0]     awid_w    = awvalid_q ? awid_q    : axi_awid_i;
 
-reg [31:0]      awaddr_r;
+reg [ADDR_W-1:0]    awaddr_r;
 
 always @ *
 begin
@@ -202,7 +203,7 @@ end
 
 always @ (posedge clk_i )
 if (rst_i)
-    awaddr_q <= 32'b0;
+    awaddr_q <= '0;
 else
     awaddr_q <= awaddr_r;
 
@@ -289,19 +290,19 @@ assign wr_last_o    = wlast_w;
 //-----------------------------------------------------------------
 // Read address skid buffer
 //-----------------------------------------------------------------
-reg             arvalid_q;
-reg [31:0]      araddr_q;
-reg [1:0]       arburst_q;
-reg [7:0]       arlen_q;
-reg [ID_W-1:0]  arid_q;
+reg                 arvalid_q;
+reg [ADDR_W-1:0]    araddr_q;
+reg [1:0]           arburst_q;
+reg [7:0]           arlen_q;
+reg [ID_W-1:0]      arid_q;
 
-wire            arvalid_w = arvalid_q | axi_arvalid_i;
-wire [31:0]     araddr_w  = arvalid_q ? araddr_q  : axi_araddr_i;
-wire [1:0]      arburst_w = arvalid_q ? arburst_q : axi_arburst_i;
-wire [7:0]      arlen_w   = arvalid_q ? arlen_q   : axi_arlen_i;
-wire [ID_W-1:0] arid_w    = arvalid_q ? arid_q    : axi_arid_i;
+wire                arvalid_w = arvalid_q | axi_arvalid_i;
+wire [ADDR_W-1:0]   araddr_w  = arvalid_q ? araddr_q  : axi_araddr_i;
+wire [1:0]          arburst_w = arvalid_q ? arburst_q : axi_arburst_i;
+wire [7:0]          arlen_w   = arvalid_q ? arlen_q   : axi_arlen_i;
+wire [ID_W-1:0]     arid_w    = arvalid_q ? arid_q    : axi_arid_i;
 
-reg [31:0]      araddr_r;
+reg [ADDR_W-1:0]    araddr_r;
 
 always @ *
 begin
@@ -326,7 +327,7 @@ end
 
 always @ (posedge clk_i )
 if (rst_i)
-    araddr_q <= 32'b0;
+    araddr_q <= '0;
 else
     araddr_q <= araddr_r;
 

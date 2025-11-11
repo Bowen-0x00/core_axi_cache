@@ -28,73 +28,69 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF 
 // SUCH DAMAGE.
 //-----------------------------------------------------------------
-module l2_cache_data_ram
+module l2_cache_data_ram #(
+    parameter ADDR_W = 11,               // address width (default 11 -> 2048 entries)
+    parameter DATA_W = 32                // data width (default 32)
+)
 (
     // Inputs
-     input           clk0_i
-    ,input           rst0_i
-    ,input  [ 10:0]  addr0_i
-    ,input  [ 31:0]  data0_i
-    ,input  [  3:0]  wr0_i
-    ,input           clk1_i
-    ,input           rst1_i
-    ,input  [ 10:0]  addr1_i
-    ,input  [ 31:0]  data1_i
-    ,input  [  3:0]  wr1_i
+    input                       clk0_i,
+    input                       rst0_i,
+    input  [ADDR_W-1:0]         addr0_i,
+    input  [DATA_W-1:0]         data0_i,
+    input  [(DATA_W/8)-1:0]     wr0_i,
+    input                       clk1_i,
+    input                       rst1_i,
+    input  [ADDR_W-1:0]         addr1_i,
+    input  [DATA_W-1:0]         data1_i,
+    input  [(DATA_W/8)-1:0]     wr1_i,
 
-    // Outputs
-    ,output [ 31:0]  data0_o
-    ,output [ 31:0]  data1_o
+    // Outputs,
+    output [DATA_W-1:0]         data0_o,
+    output [DATA_W-1:0]         data1_o
 );
 
-
+localparam DEPTH = (1 << ADDR_W);
+localparam STRB_W = (DATA_W/8);
 
 //-----------------------------------------------------------------
-// Dual Port RAM 8KB
+// Dual Port RAM
 // Mode: Read First
 //-----------------------------------------------------------------
 /* verilator lint_off MULTIDRIVEN */
-reg [31:0]   ram [2047:0] /*verilator public*/;
+reg [DATA_W-1:0] ram [0:DEPTH-1] /*verilator public*/;
 /* verilator lint_on MULTIDRIVEN */
 
+reg [DATA_W-1:0] ram_read0_q;
+reg [DATA_W-1:0] ram_read1_q;
 
-reg [31:0] ram_read0_q;
-reg [31:0] ram_read1_q;
+// integer for loop index - declared at module scope (SV rule)
+int i;
 
-
-// Synchronous write
+// Synchronous write + read-first semantics on port0
 always @ (posedge clk0_i)
 begin
-    if (wr0_i[0])
-        ram[addr0_i][7:0] <= data0_i[7:0];
-    if (wr0_i[1])
-        ram[addr0_i][15:8] <= data0_i[15:8];
-    if (wr0_i[2])
-        ram[addr0_i][23:16] <= data0_i[23:16];
-    if (wr0_i[3])
-        ram[addr0_i][31:24] <= data0_i[31:24];
+    // Note: keep behavior identical to original: write bytes (if strobe) then read
+    for (i = 0; i < STRB_W; i = i + 1) begin
+        if (wr0_i[i])
+            ram[addr0_i][i*8 +: 8] <= data0_i[i*8 +: 8];
+    end
 
     ram_read0_q <= ram[addr0_i];
 end
 
+// Synchronous write + read-first semantics on port1
 always @ (posedge clk1_i)
 begin
-    if (wr1_i[0])
-        ram[addr1_i][7:0] <= data1_i[7:0];
-    if (wr1_i[1])
-        ram[addr1_i][15:8] <= data1_i[15:8];
-    if (wr1_i[2])
-        ram[addr1_i][23:16] <= data1_i[23:16];
-    if (wr1_i[3])
-        ram[addr1_i][31:24] <= data1_i[31:24];
+    for (i = 0; i < STRB_W; i = i + 1) begin
+        if (wr1_i[i])
+            ram[addr1_i][i*8 +: 8] <= data1_i[i*8 +: 8];
+    end
 
     ram_read1_q <= ram[addr1_i];
 end
 
-
 assign data0_o = ram_read0_q;
 assign data1_o = ram_read1_q;
-
-
 
 endmodule
