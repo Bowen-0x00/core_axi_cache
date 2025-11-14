@@ -39,7 +39,8 @@ module l2_cache_outport
      parameter LINE_DATA_W   = (LINE_BYTES*8),             // 256 bits
      parameter STRB_W        = (LINE_DATA_W/8),            // 32
      parameter AWLEN_W       = 8,
-     parameter AWBURST_W     = 2
+     parameter AWBURST_W     = 2,
+     parameter AXI_WIDTH     = 256
 )
 //-----------------------------------------------------------------
 // Ports
@@ -65,7 +66,7 @@ module l2_cache_outport
     input  [ 3:0]                  outport_bid_i,
     input                          outport_arready_i,
     input                          outport_rvalid_i,
-    input  [LINE_DATA_W-1:0]       outport_rdata_i,
+    input  [AXI_WIDTH-1:0]         outport_rdata_i,
     input  [ 1:0]                  outport_rresp_i,
     input  [ 3:0]                  outport_rid_i,
     input                          outport_rlast_i,
@@ -77,7 +78,7 @@ module l2_cache_outport
     output logic [AWLEN_W-1:0]     outport_awlen_o,
     output logic [AWBURST_W-1:0]   outport_awburst_o,
     output logic                   outport_wvalid_o,
-    output logic [LINE_DATA_W-1:0] outport_wdata_o,
+    output logic [AXI_WIDTH-1:0]   outport_wdata_o,
     output logic [STRB_W-1:0]      outport_wstrb_o,
     output logic                   outport_wlast_o,
     output logic                   outport_bready_o,
@@ -85,6 +86,7 @@ module l2_cache_outport
     output logic [ADDR_W-1:0]      outport_araddr_o,
     output logic [ 3:0]            outport_arid_o,
     output logic [AWLEN_W-1:0]     outport_arlen_o,
+    output logic [2:0]             outport_arsize_o,
     output logic [AWBURST_W-1:0]   outport_arburst_o,
     output logic                   outport_rready_o
 );
@@ -175,7 +177,7 @@ end
 assign outport_awvalid_o = req_valid_w & ~awvalid_q & ~request_rd_w & ~write_pending_q;
 assign outport_awaddr_o  = request_addr_w;
 assign outport_awid_o    = AXI_ID;
-assign outport_awlen_o   = {AWLEN_W{1'b0}};  // 32-bytes (single beat)
+assign outport_awlen_o   = (LINE_DATA_W + AXI_WIDTH - 1) / AXI_WIDTH - 1;
 assign outport_awburst_o = 2'b01; // INCR
 assign outport_wvalid_o  = req_valid_w & ~wvalid_q & ~request_rd_w & ~write_pending_q;
 assign outport_wdata_o   = request_data_w;
@@ -192,7 +194,8 @@ assign read_block_w = write_pending_q && (write_addr_q == request_addr_w);
 assign outport_arvalid_o = req_valid_w & request_rd_w & ~read_block_w;
 assign outport_araddr_o  = request_addr_w;
 assign outport_arid_o    = AXI_ID;
-assign outport_arlen_o   = {AWLEN_W{1'b0}};  // Max single-beat
+assign outport_arlen_o   = (LINE_DATA_W + AXI_WIDTH - 1) / AXI_WIDTH - 1;
+assign outport_arsize_o  = $clog2(LINE_BYTES);
 assign outport_arburst_o = 2'b01; // INCR
 
 //-----------------------------------------------------------------
@@ -217,15 +220,84 @@ always_ff @(posedge clk_i or posedge rst_i) begin
         early_wr_ack_q <= inport_wr_i & inport_accept_o;
 end
 
-assign inport_ack_o       = outport_rvalid_i | early_wr_ack_q;
+// assign inport_ack_o       = outport_rvalid_i | early_wr_ack_q;
 assign inport_error_o     = outport_rvalid_i ? (|outport_rresp_i) : 1'b0;
-assign inport_read_data_o = outport_rdata_i;
+// assign inport_read_data_o = outport_rdata_i;
 
 //-----------------------------------------------------------------
 // Simple tie-offs (bready/rready already assigned)
 //-----------------------------------------------------------------
 assign outport_bready_o = 1'b1;
 assign outport_rready_o = 1'b1;
+
+
+localparam int N_BEATS = (LINE_DATA_W + AXI_WIDTH - 1) / AXI_WIDTH; // ceil
+localparam int BEAT_CNT_W = $clog2(N_BEATS + 1); // enough bits to count up to N_BEATS
+
+// state registers
+logic [LINE_DATA_W-1:0] read_accum_r, read_accum_n;
+logic [BEAT_CNT_W-1:0]  beat_idx_r,    beat_idx_n;
+logic                   assembling_r,  assembling_n;
+logic                   read_done_pulse_n;
+
+//
+// combinational next-state
+//
+always_comb begin
+  // default: keep current
+  read_accum_n     = read_accum_r;
+  beat_idx_n       = beat_idx_r;
+  assembling_n     = assembling_r;
+  read_done_pulse_n = 1'b0;
+
+  // when an R beat arrives, place it into accumulator at offset beat_idx_r*AXI_WIDTH
+  if (outport_rvalid_i) begin
+    // place beat into accumulator (little-beat-first)
+    // slicing with variable start: [start +: AXI_WIDTH]
+    // If AXI_WIDTH larger than remaining bits, the slice will still write but final output is truncated by port width.
+    read_accum_n[beat_idx_r*AXI_WIDTH +: AXI_WIDTH] = outport_rdata_i;
+
+    beat_idx_n   = beat_idx_r + 1;
+    assembling_n = 1'b1;
+
+    // If this beat is the last (AXI rlast) OR we've filled the expected number
+    if (outport_rlast_i || (beat_idx_n == N_BEATS)) begin
+      read_done_pulse_n = 1'b1;  // indicate a full/partial line is ready this cycle
+      assembling_n = 1'b0;
+      // optionally reset beat_idx_n = 0 here so next read starts fresh:
+      beat_idx_n = '0;
+    end
+  end
+
+  // you could also add a timeout / abort path here if needed
+end
+
+//
+// sequential updates
+//
+always_ff @(posedge clk_i or posedge rst_i) begin
+  if (rst_i) begin
+    read_accum_r   <= '0;
+    beat_idx_r     <= '0;
+    assembling_r   <= 1'b0;
+    inport_read_data_o <= '0;
+    inport_ack_o   <= 1'b0;
+  end else begin
+    read_accum_r <= read_accum_n;
+    beat_idx_r   <= beat_idx_n;
+    assembling_r <= assembling_n;
+
+    // generate a one-cycle ack and present the assembled line
+    if (read_done_pulse_n) begin
+      // read_accum_n already includes the current beat written above
+      inport_read_data_o <= read_accum_n;
+      inport_ack_o       <= 1'b1; // pulse to indicate assembled data ready
+    end else begin
+      inport_ack_o <= 1'b0;
+    end
+  end
+end
+
 
 endmodule
 

@@ -3,3 +3,4 @@ src_v_*/
 *.log
 .bash_history
 *copy*
+data.hex

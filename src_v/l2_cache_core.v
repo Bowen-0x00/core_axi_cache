@@ -552,7 +552,7 @@ generate
 
           // Write
           .addr1_i(data_addr_m_r[CACHE_DATA_ADDR_W-1:BYTE_OFFSET_BITS+1]),
-          .data1_i(data1_data_in_m_w[giCORE_DATA_W+:CORE_DATA_W]),
+          .data1_i(data1_data_in_m_w[gi*CORE_DATA_W+:CORE_DATA_W]),
           .wr1_i(data1_write_m_r[gi*CORE_STRB_W+:CORE_STRB_W]),
           .data1_o()
         );
@@ -611,13 +611,16 @@ else if (state_q == STATE_LOOKUP && next_state_r == STATE_FLUSH_ADDR)
 //-----------------------------------------------------------------
 // Output Result
 //-----------------------------------------------------------------
-reg [($clog2(CACHE_LINE_WORDS))-1:0] data_sel_q;
+localparam int DATA_SEL_W = (CACHE_LINE_WORDS > 1) ? $clog2(CACHE_LINE_WORDS) : 1;
+logic [DATA_SEL_W-1:0] data_sel_q;
 
-always @ (posedge clk_i )
-if (rst_i)
-    data_sel_q <= {($clog2(CACHE_LINE_WORDS)){1'b0}};
-else
-    data_sel_q <= data_addr_x_r[BYTE_OFFSET_BITS +: $clog2(CACHE_LINE_WORDS)];
+always_ff @(posedge clk_i) begin
+    if (rst_i)
+        data_sel_q <= '0;
+    else
+        data_sel_q <= data_addr_x_r[BYTE_OFFSET_BITS +: DATA_SEL_W];
+end
+
 
 // Data output mux
 reg [CORE_DATA_W-1:0]  data_r;

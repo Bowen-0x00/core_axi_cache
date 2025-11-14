@@ -111,6 +111,7 @@ module l2_cache
     output [ADDR_W-1:0]            outport_araddr_o,
     output [  3:0]                 outport_arid_o,
     output [  7:0]                 outport_arlen_o,
+    output [  2:0]                 outport_arsize_o,
     output [  1:0]                 outport_arburst_o,
     output                         outport_rready_o
 );
@@ -272,6 +273,7 @@ u_egress
     .outport_araddr_o(outport_araddr_o),
     .outport_arid_o(outport_arid_o),
     .outport_arlen_o(outport_arlen_o),
+    .outport_arsize_o(outport_arsize_o),
     .outport_arburst_o(outport_arburst_o),
     .outport_rready_o(outport_rready_o),
     .outport_awready_i(outport_awready_i),

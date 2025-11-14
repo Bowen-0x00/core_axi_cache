@@ -1,6 +1,9 @@
 // tb_l2_cache.sv
 `timescale 1ns/1ps
 
+`include "axi/assign.svh"
+`include "axi/typedef.svh"
+
 module tb #(
   parameter AXI_ID       = 0,
   parameter ADDR_W       = 32,
@@ -12,6 +15,11 @@ module tb #(
   // derived widths
   localparam WSTRB_W = LINE_BYTES;         // write strobe width (bytes)
   localparam CORE_STRB_W   = (CORE_DATA_W/8);
+
+  // ID / USER widths for AXI model (match your DUT outport id width)
+  localparam int ID_W   = 4;
+  localparam int USER_W = 1;
+
   // clock / reset
   logic clk;
   logic rst;
@@ -28,7 +36,7 @@ module tb #(
   logic [ 2:0]                  inport_awsize_i;
   logic                         inport_wvalid_i;
   logic [CORE_DATA_W-1:0]       inport_wdata_i;
-  logic [CORE_STRB_W-1:0]       inport_wstrb_i; // wstrb is CPU data-width/8, keep 4 if CORE_DATA_W==32
+  logic [CORE_STRB_W-1:0]       inport_wstrb_i;
   logic                         inport_wlast_i;
   logic                         inport_bready_i;
   logic                         inport_arvalid_i;
@@ -39,7 +47,7 @@ module tb #(
   logic [ 2:0]                  inport_arsize_i;
   logic                         inport_rready_i;
 
-  // outport responses from memory model into DUT
+  // outport responses from memory model into DUT (driven by axi_sim_mem)
   logic                         outport_awready_i;
   logic                         outport_wready_i;
   logic                         outport_bvalid_i;
@@ -79,6 +87,7 @@ module tb #(
   logic [ADDR_W-1:0]            outport_araddr_o;
   logic [ 3:0]                  outport_arid_o;
   logic [ 7:0]                  outport_arlen_o;
+  logic [ 2:0]                  outport_arsize_o;
   logic [ 1:0]                  outport_arburst_o;
   logic                         outport_rready_o;
 
@@ -155,9 +164,11 @@ module tb #(
     .outport_araddr_o    (outport_araddr_o),
     .outport_arid_o      (outport_arid_o),
     .outport_arlen_o     (outport_arlen_o),
+    .outport_arsize_o    (outport_arsize_o),
     .outport_arburst_o   (outport_arburst_o),
     .outport_rready_o    (outport_rready_o)
   );
+
   // -------------------------------------------------------------------
   // Clock & reset
   // -------------------------------------------------------------------
@@ -194,17 +205,8 @@ module tb #(
 
     inport_rready_i  <= '1;
 
-    outport_awready_i <= '1;
-    outport_wready_i  <= '1;
-    outport_bvalid_i  <= '0;
-    outport_bresp_i   <= '0;
-    outport_bid_i     <= '0;
-    outport_arready_i <= '1;
-    outport_rvalid_i  <= '1;
-    outport_rdata_i   <= '0;
-    outport_rresp_i   <= '0;
-    outport_rid_i     <= '0;
-    outport_rlast_i   <= '1;
+    // NOTE: outport_*_i (memory responses) are driven by axi_sim_mem below --
+    //       do NOT initialize them here to avoid multiple drivers.
 
     // wait reset cycles
     repeat (5) @(posedge clk);
@@ -218,30 +220,112 @@ module tb #(
     repeat (50) @(posedge clk);
     axi_inport_read({{(ADDR_W-32){1'b0}}, 32'h0000_1000}, 4'd0);
 
+    axi_inport_read({{(ADDR_W-32){1'b0}}, 32'h0000_0000}, 4'd0);
     $display("[%0t] TB: done", $time);
     #100;
     $finish;
   end
 
   // -------------------------------------------------------------------
-  // Simple AXI memory model (responds to DUT outport_*_o, drives outport_*_i)
-  // - supports single-beat writes/reads (awlen/arlen == 0)
-  // - memory is byte-addressable
+  // Simple AXI memory model replaced by axi_sim_mem instantiation
   // -------------------------------------------------------------------
-  localparam MEM_BYTES = 1 << 20; // 1MB
-  byte mem [0:MEM_BYTES-1];
+  // typedefs for AXI model
+  typedef logic [ADDR_W-1:0]        addr_t;
+  typedef logic [LINE_DATA_W-1:0]   data_t;
+  typedef logic [ID_W-1:0]          id_t;
+  typedef logic [WSTRB_W-1:0]       strb_t;
+  typedef logic [USER_W-1:0]        user_t;
 
-  logic [ADDR_W-1:0] mem_pending_awaddr;
-  logic [7:0]        mem_pending_awlen;
-  logic [3:0]        mem_pending_awid;
-  bit                mem_aw_seen;
+  // create struct typedefs
+  `AXI_TYPEDEF_ALL(axi, addr_t, id_t, data_t, strb_t, user_t)
 
-  logic [ADDR_W-1:0] mem_pending_araddr;
-  logic [3:0]        mem_pending_arid;
-  bit                mem_ar_seen;
+  // single-port arrays (axi_sim_mem expects arrays [NumPorts-1:0])
+  axi_req_t  [0:0] axi_req_arr  ;
+  axi_resp_t  [0:0] axi_resp_arr  ;
+
+  // build request struct from DUT outport signals
+  // (always_comb used to avoid multiple drivers / blocking)
+  always_comb begin
+    // default-clear whole struct to avoid x-propagation
+    axi_req_arr[0] = '0;
+
+    // AW channel
+    axi_req_arr[0].aw_valid = outport_awvalid_o;
+    axi_req_arr[0].aw.addr  = outport_awaddr_o;
+    axi_req_arr[0].aw.id    = outport_awid_o;
+    axi_req_arr[0].aw.len   = outport_awlen_o;
+    axi_req_arr[0].aw.burst = outport_awburst_o;
+    // size can be left 0 or user can extend if needed
+
+    // W channel
+    axi_req_arr[0].w_valid = outport_wvalid_o;
+    axi_req_arr[0].w.data  = outport_wdata_o;
+    axi_req_arr[0].w.strb  = outport_wstrb_o;
+    axi_req_arr[0].w.last  = outport_wlast_o;
+
+    // B channel (master side indicates ready)
+    axi_req_arr[0].b_ready = outport_bready_o;
+
+    // AR channel
+    axi_req_arr[0].ar_valid = outport_arvalid_o;
+    axi_req_arr[0].ar.addr  = outport_araddr_o;
+    axi_req_arr[0].ar.id    = outport_arid_o;
+    axi_req_arr[0].ar.len   = outport_arlen_o;
+    axi_req_arr[0].ar.size  = outport_arsize_o;
+    axi_req_arr[0].ar.burst = outport_arburst_o;
+
+    // R channel (master side indicates ready)
+    axi_req_arr[0].r_ready = outport_rready_o;
+  end
+
+  // map axi_sim_mem responses back to DUT outport_*_i signals
+  // use continuous assign so only axi_sim_mem drives these signals
+  assign outport_awready_i = axi_resp_arr[0].aw_ready;
+  assign outport_wready_i  = axi_resp_arr[0].w_ready;
+  assign outport_bvalid_i  = axi_resp_arr[0].b_valid;
+  assign outport_bresp_i   = axi_resp_arr[0].b.resp;
+  assign outport_bid_i     = axi_resp_arr[0].b.id;
+  assign outport_arready_i = axi_resp_arr[0].ar_ready;
+  assign outport_rvalid_i  = axi_resp_arr[0].r_valid;
+  assign outport_rdata_i   = axi_resp_arr[0].r.data;
+  assign outport_rresp_i   = axi_resp_arr[0].r.resp;
+  assign outport_rid_i     = axi_resp_arr[0].r.id;
+  assign outport_rlast_i   = axi_resp_arr[0].r.last;
+
+  // instantiate the axi_sim_mem (single port)
+  axi_sim_mem #(
+    .AddrWidth  (ADDR_W),
+    .DataWidth  (LINE_DATA_W),
+    .IdWidth    (ID_W),
+    .UserWidth  (USER_W),
+    .axi_req_t  (axi_req_t),
+    .axi_rsp_t  (axi_resp_t),
+    .NumPorts   (1)
+  ) i_axi_sim_mem (
+    .clk_i             ( clk           ),
+    .rst_ni            ( ~rst          ), // axi_sim_mem expects active-low reset
+    .axi_req_i         ( axi_req_arr   ),
+    .axi_rsp_o         ( axi_resp_arr   ),
+    // monitors left unconnected (optional)
+    .mon_w_valid_o     ( ),
+    .mon_w_addr_o      ( ),
+    .mon_w_data_o      ( ),
+    .mon_w_id_o        ( ),
+    .mon_w_user_o      ( ),
+    .mon_w_beat_count_o( ),
+    .mon_w_last_o      ( ),
+    .mon_r_valid_o     ( ),
+    .mon_r_addr_o      ( ),
+    .mon_r_data_o      ( ),
+    .mon_r_id_o        ( ),
+    .mon_r_user_o      ( ),
+    .mon_r_beat_count_o( ),
+    .mon_r_last_o      ( )
+  );
 
   // -------------------------------------------------------------------
   // TB tasks: drive inport single-beat write and single-beat read
+  // (unchanged)
   // -------------------------------------------------------------------
   task automatic axi_inport_write(input logic [ADDR_W-1:0] addr, input logic [CORE_DATA_W-1:0] data, input logic [3:0] id = 4'd0);
     begin
@@ -324,6 +408,15 @@ module tb #(
     repeat(10000) @(posedge clk);
     $display("TB: timeout reached");
     $finish;
+  end
+
+  initial begin
+    $readmemh("../data.hex", i_axi_sim_mem.mem);
+    // $readmemh("../data.hex", i_axi_sim_mem.rerr);
+    // $readmemh("../data.hex", i_axi_sim_mem.werr);
+    
+    repeat(10) @(posedge clk);
+    $display("====Mem[0]: %X", i_axi_sim_mem.mem[32'd0]);
   end
 
 endmodule
