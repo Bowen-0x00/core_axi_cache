@@ -34,12 +34,14 @@ module l2_cache
 //-----------------------------------------------------------------
 #(
      parameter AXI_ID        = 0,
+     parameter ID_W          = 5,
      // interface widths (change numbers only)
      parameter ADDR_W        = 32,
      parameter CORE_DATA_W   = 32,             // cpu-side data width
      parameter CORE_STRB_W   = (CORE_DATA_W/8), 
      parameter LINE_BYTES    = 32,             // bytes per cache line
-     parameter LINE_DATA_W   = (LINE_BYTES*8)  // 256 bits
+     parameter LINE_DATA_W   = (LINE_BYTES*8),  // 256 bits
+     parameter OUT_AXI_WIDTH = 256
 )
 //-----------------------------------------------------------------
 // Ports
@@ -53,18 +55,18 @@ module l2_cache
     // AXI/Inport (master->cache ingress)
     input                          inport_awvalid_i,
     input  [ADDR_W-1:0]            inport_awaddr_i,
-    input  [  3:0]                 inport_awid_i,
+    input  [ID_W-1:0]              inport_awid_i,
     input  [  7:0]                 inport_awlen_i,
     input  [  1:0]                 inport_awburst_i,
     input  [  2:0]                 inport_awsize_i,
     input                          inport_wvalid_i,
     input  [CORE_DATA_W-1:0]       inport_wdata_i,
-    input  [CORE_STRB_W-1:0]                 inport_wstrb_i,
+    input  [CORE_STRB_W-1:0]       inport_wstrb_i,
     input                          inport_wlast_i,
     input                          inport_bready_i,
     input                          inport_arvalid_i,
     input  [ADDR_W-1:0]            inport_araddr_i,
-    input  [  3:0]                 inport_arid_i,
+    input  [ID_W-1:0]              inport_arid_i,
     input  [  7:0]                 inport_arlen_i,
     input  [  1:0]                 inport_arburst_i,
     input  [  2:0]                 inport_arsize_i,
@@ -75,12 +77,12 @@ module l2_cache
     input                          outport_wready_i,
     input                          outport_bvalid_i,
     input  [  1:0]                 outport_bresp_i,
-    input  [  3:0]                 outport_bid_i,
+    input  [ID_W-1:0]              outport_bid_i,
     input                          outport_arready_i,
     input                          outport_rvalid_i,
-    input  [LINE_DATA_W-1:0]       outport_rdata_i,
+    input  [OUT_AXI_WIDTH-1:0]     outport_rdata_i,
     input  [  1:0]                 outport_rresp_i,
-    input  [  3:0]                 outport_rid_i,
+    input  [ID_W-1:0]              outport_rid_i,
     input                          outport_rlast_i,
 
     // Outputs (back to AXI master),
@@ -88,28 +90,29 @@ module l2_cache
     output                         inport_wready_o,
     output                         inport_bvalid_o,
     output [  1:0]                 inport_bresp_o,
-    output [  3:0]                 inport_bid_o,
+    output [ID_W-1:0]              inport_bid_o,
     output                         inport_arready_o,
     output                         inport_rvalid_o,
     output [CORE_DATA_W-1:0]       inport_rdata_o,
     output [  1:0]                 inport_rresp_o,
-    output [  3:0]                 inport_rid_o,
+    output [ID_W-1:0]              inport_rid_o,
     output                         inport_rlast_o,
 
     // Outputs to memory (from egress),
     output                         outport_awvalid_o,
     output [ADDR_W-1:0]            outport_awaddr_o,
-    output [  3:0]                 outport_awid_o,
+    output [ID_W-1:0]              outport_awid_o,
     output [  7:0]                 outport_awlen_o,
+    output [  2:0]                 outport_awsize_o,
     output [  1:0]                 outport_awburst_o,
     output                         outport_wvalid_o,
-    output [LINE_DATA_W-1:0]       outport_wdata_o,
+    output [OUT_AXI_WIDTH-1:0]     outport_wdata_o,
     output [ADDR_W-1:0]            outport_wstrb_o,
     output                         outport_wlast_o,
     output                         outport_bready_o,
     output                         outport_arvalid_o,
     output [ADDR_W-1:0]            outport_araddr_o,
-    output [  3:0]                 outport_arid_o,
+    output [ID_W-1:0]              outport_arid_o,
     output [  7:0]                 outport_arlen_o,
     output [  2:0]                 outport_arsize_o,
     output [  1:0]                 outport_arburst_o,
@@ -154,6 +157,7 @@ wire flush_w = !dbg_mode_i & dbg_mode_q;
 //-----------------------------------------------------------------
 l2_cache_inport #(
     .AXI_ID       (AXI_ID),
+    .ID_W     (ID_W),
     .ADDR_W       (ADDR_W),
     .DATA_W       (CORE_DATA_W)
 )
@@ -206,6 +210,7 @@ u_ingress
 //-----------------------------------------------------------------
 l2_cache_core #(
     .AXI_ID             (AXI_ID),
+    .ID_W           (ID_W),
     .ADDR_W             (ADDR_W),
     .CORE_DATA_W        (CORE_DATA_W),
     .L2_CACHE_LINE_SIZE (LINE_BYTES)
@@ -241,9 +246,11 @@ l2_cache_core #(
 l2_cache_outport
 #(
      .AXI_ID(AXI_ID),
+     .ID_W     (ID_W),
      .ADDR_W       (ADDR_W),
      .CORE_DATA_W  (CORE_DATA_W),
-     .LINE_BYTES   (LINE_BYTES)
+     .LINE_BYTES   (LINE_BYTES),
+     .OUT_AXI_WIDTH(OUT_AXI_WIDTH)
 )
 u_egress
 (
@@ -263,6 +270,7 @@ u_egress
     .outport_awaddr_o(outport_awaddr_o),
     .outport_awid_o(outport_awid_o),
     .outport_awlen_o(outport_awlen_o),
+    .outport_awsize_o(outport_awsize_o),
     .outport_awburst_o(outport_awburst_o),
     .outport_wvalid_o(outport_wvalid_o),
     .outport_wdata_o(outport_wdata_o),

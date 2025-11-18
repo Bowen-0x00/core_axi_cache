@@ -68,7 +68,7 @@ localparam BYTE_OFFSET_BITS = $clog2(CORE_STRB_W); // e.g. CORE_STRB_W=4 -> 2 bi
 
 // Number of words in a cache line (cache-line / core-word)
 localparam CACHE_LINE_WORDS = (L2_CACHE_LINE_SIZE / (CORE_DATA_W/8));
-
+localparam WORD_OFFSET_BITS = $clog2(CACHE_LINE_WORDS);
 // address width used by data RAM indexing
 localparam CACHE_DATA_ADDR_W = L2_CACHE_LINE_ADDR_W + L2_CACHE_LINE_SIZE_W - BYTE_OFFSET_BITS;
 
@@ -78,19 +78,17 @@ localparam DATA_WR_MASK_W = CACHE_LINE_WORDS * CORE_STRB_W;
 //-----------------------------------------------------------------
 // States
 //-----------------------------------------------------------------
-localparam STATE_RESET       = 4'd0;
-localparam STATE_FLUSH_ADDR  = 4'd1;
-localparam STATE_FLUSH       = 4'd2;
-localparam STATE_LOOKUP      = 4'd3;
-localparam STATE_READ        = 4'd4;
-localparam STATE_WRITE       = 4'd5;
-localparam STATE_REFILL      = 4'd6;
-localparam STATE_EVICT       = 4'd7;
-localparam STATE_EVICT_WAIT  = 4'd8;
-
-// States
-reg [STATE_W-1:0]           next_state_r;
-reg [STATE_W-1:0]           state_q;
+enum logic [3:0] {
+    STATE_RESET,
+    STATE_FLUSH_ADDR,
+    STATE_FLUSH,
+    STATE_LOOKUP,
+    STATE_READ,
+    STATE_WRITE,
+    STATE_REFILL,
+    STATE_EVICT,
+    STATE_EVICT_WAIT
+} state_q, next_state_r;
 
 //-----------------------------------------------------------------
 // Request buffer
@@ -142,10 +140,10 @@ begin
     if (state_q == STATE_LOOKUP)
     begin
         // Previous access missed - do not accept new requests
-        if ((inport_rd_m_q || (inport_wr_m_q != {CORE_STRB_W{1'b0}})) && !tag_hit_any_m_w)
+        if ((inport_rd_m_q || (inport_wr_m_q != '0)) && !tag_hit_any_m_w)
             inport_accept_r = 1'b0;
         // Write followed by read - detect writes to the same line, or addresses which alias in tag lookups
-        else if ((|inport_wr_m_q) && inport_rd_i && inport_addr_i[ADDR_W-1:2] == inport_addr_m_q[ADDR_W-1:2])
+        else if ((|inport_wr_m_q) && inport_rd_i && inport_addr_i[ADDR_W-1:BYTE_OFFSET_BITS] == inport_addr_m_q[ADDR_W-1:BYTE_OFFSET_BITS])
             inport_accept_r = 1'b0;
         else
             inport_accept_r = 1'b1;
@@ -160,7 +158,8 @@ wire [L2_CACHE_TAG_CMP_ADDR_W-1:0] req_addr_tag_cmp_m_w = inport_addr_m_q[`L2_CA
 //-----------------------------------------------------------------
 // Registers / Wires
 //-----------------------------------------------------------------
-reg [0:0]  replace_way_q;
+localparam REPLACE_W = (L2_CACHE_NUM_WAYS > 1) ? $clog2(L2_CACHE_NUM_WAYS) : 1;
+reg [REPLACE_W-1:0] replace_way_q;
 
 wire           pmem_wr_w;
 wire           pmem_rd_w;
@@ -451,26 +450,17 @@ end
 
 // Data RAM write enable (way 0)
 reg [DATA_WR_MASK_W-1:0] data0_write_m_r;
+integer word_index;
 always @ *
 begin
-    data0_write_m_r = {DATA_WR_MASK_W{1'b0}};
+    data0_write_m_r = '0;
 
     if (state_q == STATE_REFILL)
-        data0_write_m_r = (pmem_ack_w && replace_way_q == 0) ? {DATA_WR_MASK_W{1'b1}} : {DATA_WR_MASK_W{1'b0}};
+        data0_write_m_r = (pmem_ack_w && replace_way_q == 0) ? '1 : '0;
     else if (state_q == STATE_WRITE || state_q == STATE_LOOKUP)
     begin
-        case (inport_addr_m_q[L2_CACHE_LINE_SIZE_W-1:BYTE_OFFSET_BITS])
-        // for each word index set the corresponding strobes
-        3'd0: data0_write_m_r[ 0*CORE_STRB_W+:CORE_STRB_W ] = inport_wr_m_q & {CORE_STRB_W{tag0_hit_m_w}};
-        3'd1: data0_write_m_r[ 1*CORE_STRB_W+:CORE_STRB_W ] = inport_wr_m_q & {CORE_STRB_W{tag0_hit_m_w}};
-        3'd2: data0_write_m_r[ 2*CORE_STRB_W+:CORE_STRB_W ] = inport_wr_m_q & {CORE_STRB_W{tag0_hit_m_w}};
-        3'd3: data0_write_m_r[ 3*CORE_STRB_W+:CORE_STRB_W ] = inport_wr_m_q & {CORE_STRB_W{tag0_hit_m_w}};
-        3'd4: data0_write_m_r[ 4*CORE_STRB_W+:CORE_STRB_W ] = inport_wr_m_q & {CORE_STRB_W{tag0_hit_m_w}};
-        3'd5: data0_write_m_r[ 5*CORE_STRB_W+:CORE_STRB_W ] = inport_wr_m_q & {CORE_STRB_W{tag0_hit_m_w}};
-        3'd6: data0_write_m_r[ 6*CORE_STRB_W+:CORE_STRB_W ] = inport_wr_m_q & {CORE_STRB_W{tag0_hit_m_w}};
-        3'd7: data0_write_m_r[ 7*CORE_STRB_W+:CORE_STRB_W ] = inport_wr_m_q & {CORE_STRB_W{tag0_hit_m_w}};
-        default: ;
-        endcase
+        word_index = inport_addr_m_q[L2_CACHE_LINE_SIZE_W-1:BYTE_OFFSET_BITS];
+        data0_write_m_r[ word_index*CORE_STRB_W+:CORE_STRB_W ] = inport_wr_m_q & {CORE_STRB_W{tag0_hit_m_w}};
     end
 end
 
@@ -491,13 +481,13 @@ generate
           .rst1_i(rst_i),
 
           // Read
-          .addr0_i(data_addr_x_r[CACHE_DATA_ADDR_W-1:BYTE_OFFSET_BITS+1]), // kept same addressing approach
+          .addr0_i(data_addr_x_r[CACHE_DATA_ADDR_W-1:WORD_OFFSET_BITS]), // kept same addressing approach
           .data0_i({CORE_DATA_W{1'b0}}),
           .wr0_i({CORE_STRB_W{1'b0}}),
           .data0_o(data0_data_out_m_w[gi*CORE_DATA_W+:CORE_DATA_W]),
 
           // Write
-          .addr1_i(data_addr_m_r[CACHE_DATA_ADDR_W-1:BYTE_OFFSET_BITS+1]),
+          .addr1_i(data_addr_m_r[CACHE_DATA_ADDR_W-1:WORD_OFFSET_BITS]),
           .data1_i(data0_data_in_m_w[gi*CORE_DATA_W+:CORE_DATA_W]),
           .wr1_i(data0_write_m_r[gi*CORE_STRB_W+:CORE_STRB_W]),
           .data1_o()
@@ -545,13 +535,13 @@ generate
           .rst1_i(rst_i),
 
           // Read
-          .addr0_i(data_addr_x_r[CACHE_DATA_ADDR_W-1:BYTE_OFFSET_BITS+1]),
+          .addr0_i(data_addr_x_r[CACHE_DATA_ADDR_W-1:WORD_OFFSET_BITS]),
           .data0_i({CORE_DATA_W{1'b0}}),
           .wr0_i({CORE_STRB_W{1'b0}}),
           .data0_o(data1_data_out_m_w[gi*CORE_DATA_W+:CORE_DATA_W]),
 
           // Write
-          .addr1_i(data_addr_m_r[CACHE_DATA_ADDR_W-1:BYTE_OFFSET_BITS+1]),
+          .addr1_i(data_addr_m_r[CACHE_DATA_ADDR_W-1:WORD_OFFSET_BITS]),
           .data1_i(data1_data_in_m_w[gi*CORE_DATA_W+:CORE_DATA_W]),
           .wr1_i(data1_write_m_r[gi*CORE_STRB_W+:CORE_STRB_W]),
           .data1_o()
@@ -618,7 +608,7 @@ always_ff @(posedge clk_i) begin
     if (rst_i)
         data_sel_q <= '0;
     else
-        data_sel_q <= data_addr_x_r[BYTE_OFFSET_BITS +: DATA_SEL_W];
+        data_sel_q <= data_addr_x_r[0 +: DATA_SEL_W];
 end
 
 
@@ -635,16 +625,8 @@ begin
     tag1_hit_m_w: data_wide_r = data1_data_out_m_w;
     endcase
 
-    case (data_sel_q)
-    3'd0: data_r = data_wide_r[ (0+1)*CORE_DATA_W-1 : (0)*CORE_DATA_W ];
-    3'd1: data_r = data_wide_r[ (1+1)*CORE_DATA_W-1 : (1)*CORE_DATA_W ];
-    3'd2: data_r = data_wide_r[ (2+1)*CORE_DATA_W-1 : (2)*CORE_DATA_W ];
-    3'd3: data_r = data_wide_r[ (3+1)*CORE_DATA_W-1 : (3)*CORE_DATA_W ];
-    3'd4: data_r = data_wide_r[ (4+1)*CORE_DATA_W-1 : (4)*CORE_DATA_W ];
-    3'd5: data_r = data_wide_r[ (5+1)*CORE_DATA_W-1 : (5)*CORE_DATA_W ];
-    3'd6: data_r = data_wide_r[ (6+1)*CORE_DATA_W-1 : (6)*CORE_DATA_W ];
-    3'd7: data_r = data_wide_r[ (7+1)*CORE_DATA_W-1 : (7)*CORE_DATA_W ];
-    endcase
+    data_r = data_wide_r[ data_sel_q*CORE_DATA_W +: CORE_DATA_W ];
+
 end
 
 assign inport_data_rd_o  = data_r;
@@ -694,7 +676,7 @@ begin
     STATE_LOOKUP :
     begin
         // Previous access missed in the cache
-        if ((inport_rd_m_q || (inport_wr_m_q != {CORE_STRB_W{1'b0}})) && !tag_hit_any_m_w)
+        if ((inport_rd_m_q || (inport_wr_m_q != '0)) && !tag_hit_any_m_w)
         begin
             // Evict dirty line first
             if (evict_way_w)
@@ -716,7 +698,7 @@ begin
         if (pmem_ack_w)
         begin
             // Refill reason was write
-            if (inport_wr_m_q != {CORE_STRB_W{1'b0}})
+            if (inport_wr_m_q != '0)
                 next_state_r = STATE_WRITE;
             // Refill reason was read
             else
@@ -772,7 +754,7 @@ begin
     if (state_q == STATE_LOOKUP)
     begin
         // Normal hit - read or write
-        if ((inport_rd_m_q || (inport_wr_m_q != {CORE_STRB_W{1'b0}})) && tag_hit_any_m_w)
+        if ((inport_rd_m_q || (inport_wr_m_q != '0)) && tag_hit_any_m_w)
             inport_ack_r = 1'b1;
     end
 end
@@ -815,7 +797,7 @@ else if (pmem_accept_w)
 
 always @ (posedge clk_i )
 if (rst_i)
-    pmem_write_data_q <= {(L2_CACHE_LINE_SIZE*8){1'b0}};
+    pmem_write_data_q <= '0;
 else if (!pmem_accept_w)
     pmem_write_data_q <= pmem_write_data_w;
 
@@ -845,7 +827,7 @@ assign pmem_wr_w         = (evict_request_w || pmem_wr_q) ? 1'b1 : 1'b0;
 assign pmem_addr_w       = pmem_rd_w ? {inport_addr_m_q[ADDR_W-1:L2_CACHE_LINE_SIZE_W], {(L2_CACHE_LINE_SIZE_W){1'b0}}} :
                            {evict_addr_w, {(L2_CACHE_LINE_SIZE_W){1'b0}}};
 
-assign pmem_len_w        = (refill_request_w || pmem_rd_q || (state_q == STATE_EVICT && pmem_wr0_q)) ? 8'd7 : 8'd0;
+assign pmem_len_w        = (refill_request_w || pmem_rd_q || (state_q == STATE_EVICT && pmem_wr0_q)) ? (CACHE_LINE_WORDS - 1) : '0;
 assign pmem_write_data_w = pmem_wr_q ? pmem_write_data_q : evict_data_w;
 
 assign outport_wr_o         = pmem_wr_w;

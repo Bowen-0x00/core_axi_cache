@@ -9,7 +9,8 @@ module tb #(
   parameter ADDR_W       = 32,
   parameter CORE_DATA_W  = 256,             // cpu-side data width
   parameter LINE_BYTES   = 64,             // bytes per cache line
-  parameter LINE_DATA_W  = (LINE_BYTES*8)  // derived: bits per line
+  parameter LINE_DATA_W  = (LINE_BYTES*8),  // derived: bits per line
+  parameter OUT_AXI_WIDTH = 256             // outport (memory side) data width
 );
 
   // derived widths
@@ -17,7 +18,7 @@ module tb #(
   localparam CORE_STRB_W   = (CORE_DATA_W/8);
 
   // ID / USER widths for AXI model (match your DUT outport id width)
-  localparam int ID_W   = 4;
+  localparam int ID_W   = 1;
   localparam int USER_W = 1;
 
   // clock / reset
@@ -55,7 +56,7 @@ module tb #(
   logic [3:0]                   outport_bid_i;
   logic                         outport_arready_i;
   logic                         outport_rvalid_i;
-  logic [LINE_DATA_W-1:0]       outport_rdata_i;
+  logic [OUT_AXI_WIDTH-1:0]     outport_rdata_i;
   logic [1:0]                   outport_rresp_i;
   logic [3:0]                   outport_rid_i;
   logic                         outport_rlast_i;
@@ -79,8 +80,8 @@ module tb #(
   logic [ 7:0]                  outport_awlen_o;
   logic [ 1:0]                  outport_awburst_o;
   logic                         outport_wvalid_o;
-  logic [LINE_DATA_W-1:0]       outport_wdata_o;
-  logic [WSTRB_W-1:0]           outport_wstrb_o;
+  logic [OUT_AXI_WIDTH-1:0]     outport_wdata_o;
+  logic [OUT_AXI_WIDTH/8-1:0]   outport_wstrb_o;
   logic                         outport_wlast_o;
   logic                         outport_bready_o;
   logic                         outport_arvalid_o;
@@ -97,7 +98,8 @@ module tb #(
     .ADDR_W       (ADDR_W),
     .CORE_DATA_W  (CORE_DATA_W),
     .LINE_BYTES   (LINE_BYTES),
-    .LINE_DATA_W  (LINE_DATA_W)
+    .LINE_DATA_W  (LINE_DATA_W),
+    .OUT_AXI_WIDTH(OUT_AXI_WIDTH)
   ) dut (
     .clk_i               (clk),
     .rst_i               (rst),
@@ -221,6 +223,12 @@ module tb #(
     axi_inport_read({{(ADDR_W-32){1'b0}}, 32'h0000_1000}, 4'd0);
 
     axi_inport_read({{(ADDR_W-32){1'b0}}, 32'h0000_0000}, 4'd0);
+
+    axi_inport_read({{(ADDR_W-32){1'b0}}, 32'h0000_0008}, 4'd0);
+    axi_inport_read({{(ADDR_W-32){1'b0}}, 32'h0000_0020}, 4'd0);
+    axi_inport_read({{(ADDR_W-32){1'b0}}, 32'h0000_0040}, 4'd0);
+    axi_inport_read({{(ADDR_W-32){1'b0}}, 32'h0000_0080}, 4'd0);
+    axi_inport_read({{(ADDR_W-32){1'b0}}, 32'h0000_00c0}, 4'd0);
     $display("[%0t] TB: done", $time);
     #100;
     $finish;
@@ -230,11 +238,11 @@ module tb #(
   // Simple AXI memory model replaced by axi_sim_mem instantiation
   // -------------------------------------------------------------------
   // typedefs for AXI model
-  typedef logic [ADDR_W-1:0]        addr_t;
-  typedef logic [LINE_DATA_W-1:0]   data_t;
-  typedef logic [ID_W-1:0]          id_t;
-  typedef logic [WSTRB_W-1:0]       strb_t;
-  typedef logic [USER_W-1:0]        user_t;
+  typedef logic [ADDR_W-1:0]          addr_t;
+  typedef logic [OUT_AXI_WIDTH-1:0]   data_t;
+  typedef logic [ID_W-1:0]            id_t;
+  typedef logic [OUT_AXI_WIDTH/8-1:0] strb_t;
+  typedef logic [USER_W-1:0]          user_t;
 
   // create struct typedefs
   `AXI_TYPEDEF_ALL(axi, addr_t, id_t, data_t, strb_t, user_t)
@@ -295,7 +303,7 @@ module tb #(
   // instantiate the axi_sim_mem (single port)
   axi_sim_mem #(
     .AddrWidth  (ADDR_W),
-    .DataWidth  (LINE_DATA_W),
+    .DataWidth  (OUT_AXI_WIDTH),
     .IdWidth    (ID_W),
     .UserWidth  (USER_W),
     .axi_req_t  (axi_req_t),
@@ -337,13 +345,7 @@ module tb #(
       inport_awlen_i  <= '0;                    // single beat
       inport_awburst_i<= 2'b01;                 // INCR
       // choose awsize consistent with CORE_DATA_W (log2(bytes))
-      unique case (CORE_DATA_W)
-        8:  inport_awsize_i <= 3'd0; // 1 byte
-        16: inport_awsize_i <= 3'd1; // 2 bytes
-        32: inport_awsize_i <= 3'd2; // 4 bytes
-        64: inport_awsize_i <= 3'd3; // 8 bytes
-        default: inport_awsize_i <= 3'd2; // fallback to 4 bytes
-      endcase
+      inport_awsize_i <= $clog2(CORE_DATA_W/8);
       inport_awvalid_i<= 1;
       @(posedge clk);
       wait (inport_awready_o == 1);
@@ -377,15 +379,9 @@ module tb #(
       // AR channel
       inport_araddr_i <= addr;
       inport_arid_i   <= id;
-      inport_arlen_i  <= '0;       // single beat
+      inport_arlen_i  <= 8'd0;       // single beat
       inport_arburst_i<= 2'b01;
-      unique case (CORE_DATA_W)
-        8:  inport_arsize_i <= 3'd0;
-        16: inport_arsize_i <= 3'd1;
-        32: inport_arsize_i <= 3'd2;
-        64: inport_arsize_i <= 3'd3;
-        default: inport_arsize_i <= 3'd2;
-      endcase
+      inport_arsize_i <= $clog2(CORE_DATA_W/8);
       inport_arvalid_i<= 1;
       @(posedge clk);
       wait (inport_arready_o == 1);
@@ -394,13 +390,16 @@ module tb #(
       // R channel: we are ready to accept
       inport_rready_i <= 1;
       @(posedge clk);
-      wait (inport_rvalid_o == 1);
-      read_data = inport_rdata_o;
-      $display("[%0t] TB: got R from DUT data=0x%0h resp=%0d id=%0d", $time, read_data, inport_rresp_o, inport_rid_o);
-      inport_rready_i <= 0;
+      wait (inport_rvalid_o == 1 && inport_rlast_o == 1);
+      // inport_rready_i <= 0;
     end
   endtask
 
+  always_ff @(posedge clk) begin
+    if (inport_rvalid_o && inport_rready_i) begin
+      $display("[%0t] TB: got R from DUT data=0x%0h last=%0d", $time, inport_rdata_o, inport_rlast_o);
+    end
+  end
   // -------------------------------------------------------------------
   // Timeout & finish
   // -------------------------------------------------------------------
